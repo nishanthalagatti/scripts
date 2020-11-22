@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-curl --fail --silent --location https://git.rip >/dev/null || exit 1
+curl --fail --silent --location https://git.rip > /dev/null || exit 1
 
 [[ -z ${API_KEY} ]] && echo "API_KEY not defined, exiting!" && exit 1
 
@@ -16,7 +16,9 @@ if [[ -f $URL ]]; then
 else
     sendTG "Starting <a href=\"${URL}\">dump</a> on <a href=\"$BUILD_URL\">jenkins</a>"
     if [[ $URL =~ drive.google.com ]]; then
+        echo "Google Drive URL detected"
         FILE_ID="$(echo "${URL:?}" | sed -r 's/.*([0-9a-zA-Z_-]{33}).*/\1/')"
+        echo "File ID is ${FILE_ID}"
         CONFIRM=$(wget --quiet --save-cookies /tmp/cookies.txt --keep-session-cookies --no-check-certificate "https://docs.google.com/uc?export=download&id=$FILE_ID" -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')
         aria2c --load-cookies /tmp/cookies.txt "https://docs.google.com/uc?export=download&confirm=$CONFIRM&id=$FILE_ID" || exit 1
         rm /tmp/cookies.txt
@@ -121,7 +123,7 @@ ls system/build*.prop 2> /dev/null || ls system/system/build*.prop 2> /dev/null 
 
 if [[ ! -f "boot.img" ]]; then
     x=$(find . -type f -name "boot.img")
-    if [[ -n "$x" ]]; then
+    if [[ -n $x ]]; then
         mv -v "$x" boot.img
     else
         echo "boot.img not found!"
@@ -130,7 +132,7 @@ fi
 
 if [[ ! -f "dtbo.img" ]]; then
     x=$(find . -type f -name "dtbo.img")
-    if [[ -n "$x" ]]; then
+    if [[ -n $x ]]; then
         mv -v "$x" dtbo.img
     else
         echo "dtbo.img not found!"
@@ -238,6 +240,7 @@ codename=$(grep -oP "(?<=^ro.product.device=).*" -hs {system,system/system,vendo
 [[ -z ${codename} ]] && codename=$(grep -oP "(?<=^ro.vendor.product.device=).*" -hs vendor/build*.prop | head -1)
 [[ -z ${codename} ]] && codename=$(grep -oP "(?<=^ro.product.system.device=).*" -hs {system,system/system}/build*.prop | head -1)
 [[ -z ${codename} ]] && codename=$(grep -oP "(?<=^ro.product.system.device=).*" -hs vendor/euclid/*/build.prop | head -1)
+[[ -z ${codename} ]] && codename=$(grep -oP "(?<=^ro.product.product.device=).*" -hs vendor/euclid/*/build.prop | head -1)
 [[ -z ${codename} ]] && codename=$(grep -oP "(?<=^ro.product.device=).*" -hs oppo_product/build*.prop)
 [[ -z ${codename} ]] && codename=$(grep -oP "(?<=^ro.product.device=).*" -hs my_product/build*.prop)
 [[ -z ${codename} ]] && codename=$(grep -oP "(?<=^ro.product.system.device=).*" -hs my_product/build*.prop)

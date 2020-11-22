@@ -7,16 +7,34 @@
 # shellcheck disable=SC2086,SC2029
 # SC2086: Double quote to prevent globbing and word splitting
 # SC2029: Note that, unescaped, this expands on the client side.
+
+case "${BRANCH}" in
+    "ten")
+        VERSION=10
+        ;;
+    "eleven")
+        VERSION=11
+        ;;
+esac
+
 source ~/scripts/functions
+
+function notify() {
+    if [[ ! $AOSIP_BUILDTYPE =~ ^(Official|Gapps)$ ]]; then
+        sendAOSiP "$@"
+    fi
+}
+
 export TZ=UTC
 DATE="$(date +%Y%m%d)"
-AOSIP_VERSION="AOSiP-10-${AOSIP_BUILDTYPE}-${DEVICE}-${DATE}"
+AOSIP_VERSION="AOSiP-${VERSION}-${AOSIP_BUILDTYPE}-${DEVICE}-${DATE}"
 SIGNED_OTAPACKAGE="${AOSIP_VERSION}.zip"
 BOOTIMAGE="${AOSIP_VERSION}-boot.img"
 SIGNED_TARGET_FILES="signed-target_files.zip"
 SIGNED_IMAGE_PACKAGE="${AOSIP_VERSION}-img.zip"
 OUT="./out/target/product/$DEVICE"
 UPLOAD="./upload_assets"
+UPDATER_JSON="$DEVICE-$AOSIP_BUILDTYPE".json
 mkdir -pv "$UPLOAD"
 
 if [[ $WITH_GAPPS == "true" ]]; then
@@ -24,19 +42,19 @@ if [[ $WITH_GAPPS == "true" ]]; then
 fi
 
 echo "Signing target_files APKs"
-./build/make/tools/releasetools/sign_target_files_apks -o -d ~/.android-certs $SIGNING_FLAGS "$OUT"/obj/PACKAGING/target_files_intermediates/aosip_"$DEVICE"-target_files-"$BUILD_NUMBER".zip "$UPLOAD/$SIGNED_TARGET_FILES" || exit 1
+python2 ./build/make/tools/releasetools/sign_target_files_apks -p out/host/linux-x86/ -o -d ~/.android-certs $SIGNING_FLAGS "$OUT"/obj/PACKAGING/target_files_intermediates/aosip_"$DEVICE"-target_files-"$BUILD_NUMBER".zip "$UPLOAD/$SIGNED_TARGET_FILES" || exit 1
 
 echo "Generating signed otapackage"
-./build/make/tools/releasetools/ota_from_target_files -k ~/.android-certs/releasekey --backup=true "$UPLOAD/$SIGNED_TARGET_FILES" "$UPLOAD/$SIGNED_OTAPACKAGE" || exit 1
+python2 ./build/make/tools/releasetools/ota_from_target_files -p out/host/linux-x86/ -k ~/.android-certs/releasekey --backup=true "$UPLOAD/$SIGNED_TARGET_FILES" "$UPLOAD/$SIGNED_OTAPACKAGE" || exit 1
 
 echo "Generating signed images package"
-./build/make/tools/releasetools/img_from_target_files "$UPLOAD/$SIGNED_TARGET_FILES" "$UPLOAD/$SIGNED_IMAGE_PACKAGE" || exit 1
+python2 ./build/make/tools/releasetools/img_from_target_files "$UPLOAD/$SIGNED_TARGET_FILES" "$UPLOAD/$SIGNED_IMAGE_PACKAGE" || exit 1
 
 echo "Extracting build.prop to get build timestamp"
 BUILD_TIMESTAMP=$(grep -oP "(?<=ro.build.date.utc=).*" "$OUT"/system/build.prop)
 
 echo "Generating JSON for updater"
-~/api/generate_json.py "$UPLOAD/$SIGNED_OTAPACKAGE" "$BUILD_TIMESTAMP" > "${DEVICE}"-"${AOSIP_BUILDTYPE}".json
+~/api/generate_json.py "$UPLOAD/$SIGNED_OTAPACKAGE" "$BUILD_TIMESTAMP" > "$UPDATER_JSON"
 
 echo "Extracting signed bootimage"
 7z e "$UPLOAD/$SIGNED_TARGET_FILES" IMAGES/boot.img -so > "$UPLOAD/$BOOTIMAGE"
@@ -57,14 +75,15 @@ rm -fv ~/nginx/$BUILD_NUMBER.tar
 
 if [[ $AOSIP_BUILDTYPE =~ ^(CI|CI_Gapps|Quiche|Quiche_Gapps)$ ]]; then
     ssh Illusion "rm -rfv /tmp/$BUILD_NUMBER"
-    rclone copy "${DEVICE}"-"${AOSIP_BUILDTYPE}".json kronic-sync:jenkins/
-    FOLDER_LINK="$(rclone link kronic-sync:jenkins/"$BUILD_NUMBER")"
+    scp "$UPDATER_JSON" Illusion:/tmp/
+    ssh Illusion "rclone copy /tmp/$UPDATER_JSON kronic-sync:jenkins/; rm -fv /tmp/$UPDATER_JSON"
+    FOLDER_LINK="$(ssh Illusion rclone link kronic-sync:jenkins/"$BUILD_NUMBER")"
     export PARSE_MODE="html"
-    sendAOSiP "Build <a href=\"$FOLDER_LINK\">$BUILD_NUMBER</a> - $DEVICE $AOSIP_BUILDTYPE"
-    sendAOSiP "<a href=\"$BASE_URL/$BUILD_NUMBER/$SIGNED_OTAPACKAGE\">Direct link</a> for $DEVICE $AOSIP_BUILDTYPE"
-    sendAOSiP "$(./jenkins/message_testers.py "${DEVICE}")"
+    notify "Build <a href=\"$FOLDER_LINK\">$BUILD_NUMBER</a> - $DEVICE $AOSIP_BUILDTYPE"
+    notify "<a href=\"$BASE_URL/$BUILD_NUMBER/$SIGNED_OTAPACKAGE\">Direct link</a> for $DEVICE $AOSIP_BUILDTYPE"
+    notify "$(./jenkins/message_testers.py "${DEVICE}")"
     if [[ -n $REPOPICK_LIST ]]; then
-        sendAOSiP "$(python3 ~/scripts/gerrit/parsepicks.py "${REPOPICK_LIST}")"
+        notify "$(python3 ~/scripts/gerrit/parsepicks.py "${REPOPICK_LIST}")"
     fi
 elif [[ $AOSIP_BUILDTYPE =~ ^(Official|Gapps)$ ]]; then
     ssh Illusion "bash ~/scripts/aosip/release.sh $DEVICE $BUILD_NUMBER $AOSIP_BUILDTYPE"

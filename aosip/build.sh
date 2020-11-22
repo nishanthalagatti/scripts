@@ -9,40 +9,46 @@
 # SC2029: Note that, unescaped, this expands on the client side.
 
 source ~/scripts/functions
+
+function notify() {
+    if [[ ! $AOSIP_BUILDTYPE =~ ^(Official|Gapps)$ ]]; then
+        sendAOSiP "$@"
+    fi
+}
+
 export TZ=UTC
 
-curl --silent --fail --location review.aosip.dev > /dev/null || {
-    sendAOSiP "$DEVICE $AOSIP_BUILDTYPE is being aborted because gerrit is down!"
+curl --silent --fail --location https://review.aosip.dev > /dev/null || {
+    notify "$DEVICE $AOSIP_BUILDTYPE is being aborted because gerrit is down!"
     exit 1
 }
 
 # Set some variables based on the buildtype
-if [[ $AOSIP_BUILDTYPE =~ ^(Official|Gapps|CI|CI_Gapps|Quiche|Quiche_Gapps)$ ]]; then
+if [[ $AOSIP_BUILDTYPE =~ ^(Official|Gapps|CI|CI_Gapps|Quiche|Quiche_Gapps|Ravioli|Ravioli_Gapps)$ ]]; then
     TARGET="dist"
-    if [[ $AOSIP_BUILDTYPE =~ ^(CI|CI_Gapps|Quiche|Quiche_Gapps)$ ]]; then
+    if [[ $AOSIP_BUILDTYPE =~ ^(CI|CI_Gapps|Quiche|Quiche_Gapps|Ravioli|Ravioli_Gapps)$ ]]; then
         export OVERRIDE_OTA_CHANNEL="${BASE_URL}/${DEVICE}-${AOSIP_BUILDTYPE}.json"
     fi
 else
     TARGET="kronic"
-    ZIP="AOSiP-10-$AOSIP_BUILDTYPE-$DEVICE-$(date +%Y%m%d).zip"
 fi
 
 function repo_init() {
-    repo init -u https://github.com/AOSiP/platform_manifest.git -b ten --no-tags --no-clone-bundle --current-branch
+    repo init -u https://github.com/AOSiP/platform_manifest.git -b "$BRANCH" --no-tags --no-clone-bundle --current-branch
 }
 
 function repo_sync() {
-    time repo sync -j"$(nproc)" --current-branch --no-tags --no-clone-bundle --force-sync
+    time repo sync -j"$(nproc)" --current-branch --no-tags --no-clone-bundle --force-sync --quiet
 }
 
 function clean_repo() {
-    repo forall --ignore-missing -j"$(nproc)" -c "git reset --hard m/ten && git clean -fdx"
+    repo forall --ignore-missing -j"$(nproc)" -c "git reset --quiet --hard m/$BRANCH && git clean -fdxq"
 }
 
 set -e
-sendAOSiP "${START_MESSAGE}"
+notify "${START_MESSAGE}"
 export PATH=~/bin:$PATH
-PARSE_MODE="html" sendAOSiP "Starting ${DEVICE} ${AOSIP_BUILDTYPE} build on $NODE_NAME, check progress <a href='${BUILD_URL}'>here</a>!"
+PARSE_MODE="html" notify "Starting ${DEVICE} ${AOSIP_BUILDTYPE} $BRANCH build on $NODE_NAME, check progress <a href='${BUILD_URL}'>here</a>!"
 
 [[ -d "vendor/aosip" ]] || {
     repo_init
@@ -67,8 +73,9 @@ if [[ ${SYNC} == "yes" ]]; then
         fi
     fi
     if [[ -n ${PRE_SYNC_PICKS} ]]; then
+        echo "Trying to pick $PRE_SYNC_PICKS before syncing!"
         REPOPICK_LIST="$PRE_SYNC_PICKS" repopick_stuff || {
-            sendAOSiP "Pre-sync picks failed"
+            notify "Pre-sync picks failed"
             clean_repo
             exit 1
         }
@@ -77,9 +84,10 @@ if [[ ${SYNC} == "yes" ]]; then
 fi
 
 set +e
+echo "Lunching $BUILDVARIANT for $DEVICE!"
 lunch aosip_"${DEVICE}"-"${BUILDVARIANT}"
 if [[ $AOSIP_BUILD != "$DEVICE" ]]; then
-    sendAOSiP "Lunching failed!"
+    notify "Lunching failed!"
     exit 1
 fi
 set -e
@@ -97,8 +105,10 @@ if [[ -f "jenkins/${DEVICE}" ]]; then
         REPOPICK_LIST+=" | $(cat jenkins/"${DEVICE}")"
     fi
 fi
+
+echo "Trying to pick $REPOPICK_LIST!"
 repopick_stuff || {
-    sendAOSiP "Picks failed"
+    notify "Picks failed"
     clean_repo
     exit 1
 }
@@ -110,24 +120,26 @@ CCACHE_EXEC="$(command -v ccache)"
 export USE_CCACHE CCACHE_DIR CCACHE_EXEC
 ccache -M 500G
 if ! m "$TARGET"; then
-    sendAOSiP "[ten build failed for ${DEVICE}](${BUILD_URL})"
-    sendAOSiP "$(./jenkins/tag_maintainer.py "$DEVICE")"
+    notify "[$BRANCH build failed for ${DEVICE}](${BUILD_URL})"
+    notify "$(./jenkins/tag_maintainer.py "$DEVICE")"
     exit 1
 fi
 
-sendAOSiP "${DEVICE} build is done, check [jenkins](${BUILD_URL}) for details!"
-sendAOSiP "${END_MESSAGE}"
+notify "${DEVICE} build is done, check [jenkins](${BUILD_URL}) for details!"
+notify "${END_MESSAGE}"
 
 if [[ $TARGET == "kronic" ]]; then
+    ZIP="AOSiP-$(get_build_var AOSIP_VERSION).zip"
+    [[ -f "$OUT/$ZIP" ]] || ZIP="AOSiP-$(grep ro.aosip.version "$OUT"/system/etc/prop.default | cut -d= -f2).zip"
     cp -v "$OUT/$ZIP" ~/nginx
     ssh Illusion "cd /tmp; axel -n16 -q http://$(hostname)/$ZIP; rclone copy -P $ZIP kronic-sync:jenkins/$BUILD_NUMBER; rm -fv $ZIP"
     rm -fv ~/nginx/"$ZIP"
-    FOLDER_LINK="$(rclone link kronic-sync:jenkins/"$BUILD_NUMBER")"
-    sendAOSiP "Build artifacts for job $BUILD_NUMBER can be found [here]($FOLDER_LINK)"
-    sendAOSiP "$(./jenkins/message_testers.py "${DEVICE}")"
+    FOLDER_LINK="$(ssh Illusion rclone link kronic-sync:jenkins/"$BUILD_NUMBER")"
+    notify "Build artifacts for job $BUILD_NUMBER can be found [here]($FOLDER_LINK)"
+    notify "$(./jenkins/message_testers.py "${DEVICE}")"
     if [[ -n $REPOPICK_LIST ]]; then
-        sendAOSiP "$(python3 ~/scripts/gerrit/parsepicks.py "${REPOPICK_LIST}")"
+        notify "$(python3 ~/scripts/gerrit/parsepicks.py "${REPOPICK_LIST}")"
     fi
 else
-    sendAOSiP "Wait a few minutes for a signed zip to be generated!"
+    notify "Wait a few minutes for a signed zip to be generated!"
 fi
